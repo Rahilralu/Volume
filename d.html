@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Mouth Open Volume Control</title>
+<style>
+  canvas {
+    position: absolute;
+    left: 0; top: 0;
+  }
+  #videoElement {
+    transform: scaleX(-1);
+    display: none; /* hide video as we draw canvas */
+  }
+</style>
+</head>
+<body>
+
+<video id="videoElement" autoplay playsinline></video>
+<canvas id="outputCanvas"></canvas>
+
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/face_mesh.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+
+<script>
+const videoElement = document.getElementById('videoElement');
+const canvasElement = document.getElementById('outputCanvas');
+const canvasCtx = canvasElement.getContext('2d');
+
+const faceMesh = new FaceMesh({
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/face_mesh/${file}`
+});
+faceMesh.setOptions({
+  maxNumFaces: 1,
+  refineLandmarks: true,
+  minDetectionConfidence: 0.5,
+  minTrackingConfidence: 0.5
+});
+
+faceMesh.onResults(onResults);
+
+async function setupCamera() {
+  const stream = await navigator.mediaDevices.getUserMedia({
+    video: {width: 640, height: 480},
+    audio: false
+  });
+  videoElement.srcObject = stream;
+  return new Promise((resolve) => {
+    videoElement.onloadedmetadata = () => {
+      resolve(videoElement);
+    };
+  });
+}
+
+function calculateMouthOpenRatio(landmarks, width, height) {
+  // Using landmarks 13 (upper lip) and 14 (lower lip)
+  const upperLip = landmarks[13];
+  const lowerLip = landmarks[14];
+
+  const upperY = upperLip.y * height;
+  const lowerY = lowerLip.y * height;
+
+  return lowerY - upperY; // distance in pixels
+}
+
+function drawVolumeBar(ctx, ratio) {
+  const maxHeight = 300;
+  const barHeight = Math.min(ratio * maxHeight, maxHeight);
+  ctx.fillStyle = 'green';
+  ctx.fillRect(50, 400 - barHeight, 50, barHeight);
+  ctx.fillStyle = 'white';
+  ctx.font = '20px Arial';
+  ctx.fillText(`Volume: ${(ratio * 100).toFixed(0)}%`, 50, 420);
+}
+
+function onResults(results) {
+  canvasElement.width = videoElement.videoWidth;
+  canvasElement.height = videoElement.videoHeight;
+
+  canvasCtx.save();
+  canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+
+  // Mirror image horizontally
+  canvasCtx.translate(canvasElement.width, 0);
+  canvasCtx.scale(-1, 1);
+
+  canvasCtx.drawImage(results.image, 0, 0, canvasElement.width, canvasElement.height);
+
+  if (results.multiFaceLandmarks && results.multiFaceLandmarks.length > 0) {
+    const landmarks = results.multiFaceLandmarks[0];
+
+    // Mouth landmarks indices (outer lips)
+    const mouthIndices = [61, 291, 78, 308, 13, 14, 17, 0];
+
+    // Get mouth points in pixels
+    const mouthPoints = mouthIndices.map(i => {
+      return {
+        x: landmarks[i].x * canvasElement.width,
+        y: landmarks[i].y * canvasElement.height
+      };
+    });
+
+    // Draw mouth bounding box
+    const xs = mouthPoints.map(p => p.x);
+    const ys = mouthPoints.map(p => p.y);
+    const xMin = Math.min(...xs);
+    const xMax = Math.max(...xs);
+    const yMin = Math.min(...ys);
+    const yMax = Math.max(...ys);
+
+    canvasCtx.strokeStyle = 'yellow';
+    canvasCtx.lineWidth = 2;
+    canvasCtx.strokeRect(xMin, yMin, xMax - xMin, yMax - yMin);
+
+    // Calculate mouth open distance & ratio
+    const openDist = calculateMouthOpenRatio(landmarks, canvasElement.width, canvasElement.height);
+    const mouthHeight = yMax - yMin;
+    const ratio = Math.min(Math.max(openDist / mouthHeight, 0), 1);
+
+    drawVolumeBar(canvasCtx, ratio);
+
+    console.log('Mouth open ratio:', ratio.toFixed(2));
+  }
+
+  canvasCtx.restore();
+}
+
+async function main() {
+  await setupCamera();
+  videoElement.play();
+
+  const fps = 30;
+  async function frameLoop() {
+    await faceMesh.send({image: videoElement});
+    setTimeout(frameLoop, 1000 / fps);
+  }
+
+  frameLoop();
+}
+
+main();
+</script>
+
+</body>
+</html>
